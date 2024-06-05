@@ -76,6 +76,18 @@ async function run() {
       });
     };
 
+    // use verify admin after verifyToken
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email: email };
+      const user = await usersCollection.findOne(query);
+      const isAdmin = user?.role === "admin";
+      if (!isAdmin) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
+
     // user collection api's
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -98,22 +110,21 @@ async function run() {
     });
 
     // bookings collection api's
-    app.post("/bookings", verifyToken, async (req, res) => {
+    app.post("/bookings", verifyToken, verifyAdmin, async (req, res) => {
       const booking = req.body;
       console.log(booking);
       const result = await bookingsCollection.insertOne(booking);
       res.json(result);
     });
 
-    app.get("/bookings/:email", verifyToken, async (req, res) => {
-      const email = req.params.email;
-      console.log(`Request received for email: ${email}`);
+    // get all bookings from db
+    app.get("/bookings", verifyToken, async (req, res) => {
       try {
-        const result = await bookingsCollection.find({ email }).toArray();
+        const result = await bookingsCollection.find({}).toArray();
         if (result.length === 0) {
-          console.log("No bookings found for this email.");
+          console.log("No bookings found.");
         } else {
-          console.log("Bookings found:", result);
+          //   console.log("Bookings found:", result);
         }
         res.send(result);
       } catch (error) {
@@ -122,9 +133,61 @@ async function run() {
       }
     });
 
+    // get bookings from db by email
+    app.get("/bookings/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      //   console.log(`Request received for email: ${email}`);
+      try {
+        const result = await bookingsCollection.find({ email }).toArray();
+        if (result.length === 0) {
+          console.log("No bookings found for this email.");
+        } else {
+          //   console.log("Bookings found:", result);
+        }
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching bookings:", error);
+        res.status(500).send({ message: "Error fetching bookings" });
+      }
+    });
+
+    // get a single booking by id
+    app.get("/bookings/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      //   console.log(`Request received for id: ${id}`);
+      try {
+        const result = await bookingsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (result) {
+          res.send(result);
+        } else {
+          res.status(404).send({ message: "Document not found" });
+        }
+      } catch (error) {
+        res.status(500).send({ message: "An error occurred", error });
+      }
+    });
+
+    // edit a single booking / update parcel
+    app.put("/bookings/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      console.log(id);
+      const booking = req.body;
+      const options = { upsert: true };
+      const filter = { _id: new ObjectId(id) };
+      const update = { $set: booking };
+      const result = await bookingsCollection.updateOne(
+        filter,
+        update,
+        options
+      );
+      res.send(result);
+    });
+
     app.delete("/bookings/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
-      console.log(`Request received for id: ${id}`);
+      //   console.log(`Request received for id: ${id}`);
       try {
         const result = await bookingsCollection.deleteOne({
           _id: new ObjectId(id),
