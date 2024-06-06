@@ -101,6 +101,22 @@ async function run() {
       res.json(result);
     });
 
+    // get all usersOnly from users collection
+    app.get("/users", verifyToken, verifyToken, async (req, res) => {
+      try {
+        const result = await usersCollection.find({ role: 'user' }).toArray();
+        if (result.length === 0) {
+          console.log("No users found.");
+        } else {
+          //   console.log("Users found:", result);
+        }
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching users:", error);
+        res.status(500).send({ message: "Error fetching users" });
+      }
+    });
+
     // get a user info by email from db
     app.get("/users/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
