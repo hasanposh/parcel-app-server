@@ -102,13 +102,111 @@ async function run() {
     });
 
     // get all usersOnly from users collection
-    app.get("/users", verifyToken, verifyToken, async (req, res) => {
+    // app.get("/users", verifyToken, verifyToken, async (req, res) => {
+    //   try {
+    //     const result = await usersCollection.find({ role: 'user' }).toArray();
+    //     if (result.length === 0) {
+    //       console.log("No users found.");
+    //     } else {
+    //       //   console.log("Users found:", result);
+    //     }
+    //     res.send(result);
+    //   } catch (error) {
+    //     console.error("Error fetching users:", error);
+    //     res.status(500).send({ message: "Error fetching users" });
+    //   }
+    // });
+
+    app.get("/allUsers", verifyToken, verifyAdmin, async (req, res) => {
       try {
-        const result = await usersCollection.find({ role: 'user' }).toArray();
+        const result = await usersCollection
+          .aggregate([
+            {
+              $match: { role: "user" },
+            },
+            {
+              $lookup: {
+                from: "bookings", // the name of the bookings collection
+                localField: "email", // field from users collection
+                foreignField: "email", // field from bookings collection
+                as: "bookings", // new array field containing matching bookings
+              },
+            },
+            {
+              $addFields: {
+                numberOfParcels: { $size: "$bookings" }, // size of the bookings array
+              },
+            },
+            {
+              $project: {
+                bookings: 0, // exclude the bookings array from the result
+              },
+            },
+            {
+              $sort: { email: 1 }, // sort by email in ascending order
+            },
+          ])
+          .toArray();
+
         if (result.length === 0) {
           console.log("No users found.");
         } else {
-          //   console.log("Users found:", result);
+          // console.log("Users found:", result);
+        }
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching users:", error);
+        res.status(500).send({ message: "Error fetching users" });
+      }
+    });
+
+    // get all deliver_men_Only from users collection
+    app.get("/allDeliverymen", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const result = await usersCollection
+          .aggregate([
+            {
+              $match: { role: "delivery man" },
+            },
+            {
+              $lookup: {
+                from: "bookings", // the name of the bookings collection
+                let: { deliveryManId: "$_id" },
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: {
+                        $and: [
+                          { $eq: ["$deliveryMenId", "$$deliveryManId"] },
+                          { $eq: ["$status", "delivered"] }, // assuming 'status' is the field indicating if the parcel is delivered
+                        ],
+                      },
+                    },
+                  },
+                ],
+                as: "deliveredParcels", // new array field containing matching bookings
+              },
+            },
+            {
+              $addFields: {
+                numberOfParcels: { $size: "$deliveredParcels" }, // size of the bookings array
+              },
+            },
+            {
+              $project: {
+                deliveredParcels: 0, // exclude the bookings array from the result
+              },
+            },
+            {
+              $sort: { email: 1 }, // sort by email in ascending order
+            },
+          ])
+          .toArray();
+
+        if (result.length === 0) {
+          console.log("No users found.");
+        } else {
+          // console.log("Users found:", result);
         }
         res.send(result);
       } catch (error) {
