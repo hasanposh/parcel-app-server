@@ -3,6 +3,8 @@ const app = express();
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+
 const port = process.env.PORT || 5000;
 
 // middleware
@@ -88,6 +90,26 @@ async function run() {
       next();
     };
 
+    //payment indent ceeate
+    app.post("/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+      console.log(amount, "amount inside the intent");
+      try {
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount,
+          currency: "usd",
+          payment_method_types: ["card"],
+        });
+
+        res.status(200).send({
+          clientSecret: paymentIntent.client_secret,
+        });
+      } catch (error) {
+        res.status(500).send({ error: error.message });
+      }
+    });
+
     // user collection api's
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -160,7 +182,7 @@ async function run() {
       }
     });
 
-    // get all deliver_men_Only from users collection
+    // get all delivery men from the users collection
     app.get("/allDeliverymen", verifyToken, verifyAdmin, async (req, res) => {
       try {
         const result = await usersCollection
@@ -170,48 +192,48 @@ async function run() {
             },
             {
               $lookup: {
-                from: "bookings", // the name of the bookings collection
-                let: { deliveryManId: "$_id" },
+                from: "bookings",
+                let: { deliveryManId: { $toString: "$_id" } }, // convert ObjectId to string
                 pipeline: [
                   {
                     $match: {
                       $expr: {
                         $and: [
-                          { $eq: ["$deliveryMenId", "$$deliveryManId"] },
-                          { $eq: ["$status", "delivered"] }, // assuming 'status' is the field indicating if the parcel is delivered
+                          { $eq: ["$selectedDeliveryMan", "$$deliveryManId"] },
+                          { $eq: ["$bookingStatus", "delivered"] },
                         ],
                       },
                     },
                   },
                 ],
-                as: "deliveredParcels", // new array field containing matching bookings
+                as: "deliveredParcels",
               },
             },
             {
               $addFields: {
-                numberOfParcels: { $size: "$deliveredParcels" }, // size of the bookings array
+                numberOfParcels: { $size: "$deliveredParcels" },
               },
             },
             {
               $project: {
-                deliveredParcels: 0, // exclude the bookings array from the result
+                deliveredParcels: 0,
               },
             },
             {
-              $sort: { email: 1 }, // sort by email in ascending order
+              $sort: { email: 1 },
             },
           ])
           .toArray();
 
         if (result.length === 0) {
-          console.log("No users found.");
+          console.log("No delivery men found.");
         } else {
-          // console.log("Users found:", result);
+          // console.log("Delivery men found:", result);
         }
         res.send(result);
       } catch (error) {
-        console.error("Error fetching users:", error);
-        res.status(500).send({ message: "Error fetching users" });
+        console.error("Error fetching delivery men:", error);
+        res.status(500).send({ message: "Error fetching delivery men" });
       }
     });
 
@@ -226,19 +248,46 @@ async function run() {
     // bookings collection api's
     app.post("/bookings", verifyToken, verifyAdmin, async (req, res) => {
       const booking = req.body;
-      console.log(booking);
+      // console.log(booking);
       const result = await bookingsCollection.insertOne(booking);
       res.json(result);
     });
 
-    // get all bookings from db
-    app.get("/bookings", verifyToken, async (req, res) => {
+    // get all bookings from db for admin
+    app.get("/bookings", verifyToken, verifyAdmin, async (req, res) => {
+      const { startDate, endDate } = req.query;
+
+      // Build the query object based on provided date range
+      let query = {};
+      if (startDate && endDate) {
+        query = {
+          $expr: {
+            $and: [
+              {
+                $gte: [
+                  { $dateFromString: { dateString: "$requestedDeliveryDate" } },
+                  new Date(startDate),
+                ],
+              },
+              {
+                $lte: [
+                  { $dateFromString: { dateString: "$requestedDeliveryDate" } },
+                  new Date(endDate),
+                ],
+              },
+            ],
+          },
+        };
+      }
+      console.log(query);
+
       try {
-        const result = await bookingsCollection.find({}).toArray();
+        // Apply the query object to filter the results
+        const result = await bookingsCollection.find(query).toArray();
         if (result.length === 0) {
           console.log("No bookings found.");
         } else {
-          //   console.log("Bookings found:", result);
+          console.log("Bookings found:", result);
         }
         res.send(result);
       } catch (error) {
@@ -266,7 +315,7 @@ async function run() {
     });
 
     // get a single booking by id
-    app.get("/bookings/:id", verifyToken, async (req, res) => {
+    app.get("/bookings/:id", async (req, res) => {
       const id = req.params.id;
       //   console.log(`Request received for id: ${id}`);
       try {
@@ -298,6 +347,27 @@ async function run() {
       );
       res.send(result);
     });
+
+    // manage bookings by admin
+    app.put(
+      "/bookings/admin/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        console.log(id);
+        const booking = req.body;
+        const options = { upsert: true };
+        const filter = { _id: new ObjectId(id) };
+        const update = { $set: booking };
+        const result = await bookingsCollection.updateOne(
+          filter,
+          update,
+          options
+        );
+        res.send(result);
+      }
+    );
 
     app.delete("/bookings/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
