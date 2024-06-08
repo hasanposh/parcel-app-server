@@ -36,6 +36,7 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     const usersCollection = client.db("QuokkoParcelDB").collection("users");
+    const reviewsCollection = client.db("QuokkoParcelDB").collection("reviews");
     const paymentsCollection = client
       .db("QuokkoParcelDB")
       .collection("payments");
@@ -67,7 +68,7 @@ async function run() {
 
     // middlewares
     const verifyToken = (req, res, next) => {
-      console.log("inside verify token", req.headers.authorization);
+      // console.log("inside verify token", req.headers.authorization);
       if (!req.headers.authorization) {
         return res.status(401).send({ message: "unauthorized access" });
       }
@@ -97,7 +98,7 @@ async function run() {
     app.post("/create-payment-intent", async (req, res) => {
       const { price } = req.body;
       const amount = parseInt(price * 100);
-      console.log(amount, "amount inside the intent");
+      // console.log(amount, "amount inside the intent");
       try {
         const paymentIntent = await stripe.paymentIntents.create({
           amount,
@@ -129,13 +130,13 @@ async function run() {
     // get a user info by email from db
     app.get("/users/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
-      console.log(email);
+      // console.log(email);
       const result = await usersCollection.findOne({ email });
       res.send(result);
     });
 
     // making user to admin or deliver man
-    app.put("/users/:email", verifyToken,verifyAdmin, async (req, res) => {
+    app.put("/users/:email", verifyToken, verifyAdmin, async (req, res) => {
       const email = req.params.email;
       const role = req.body.role;
       const query = { email: email };
@@ -143,7 +144,7 @@ async function run() {
         $set: { role: role },
       });
       res.json(result);
-    })
+    });
 
     // get all users for admin
     app.get("/allUsers", verifyToken, verifyAdmin, async (req, res) => {
@@ -160,11 +161,11 @@ async function run() {
                 pipeline: [
                   {
                     $match: {
-                      $expr: { 
+                      $expr: {
                         $and: [
                           { $eq: ["$email", "$$userEmail"] },
-                          { $eq: ["$payment", "done"] } // Only include bookings with payment status 'done'
-                        ]
+                          { $eq: ["$payment", "done"] }, // Only include bookings with payment status 'done'
+                        ],
                       },
                     },
                   },
@@ -172,7 +173,7 @@ async function run() {
                     $group: {
                       _id: "$email",
                       totalCalcPrice: { $sum: "$calcPrice" },
-                      bookings: { $push: "$$ROOT" }
+                      bookings: { $push: "$$ROOT" },
                     },
                   },
                 ],
@@ -180,14 +181,29 @@ async function run() {
               },
             },
             {
+              $lookup: {
+                from: "bookings",
+                localField: "email",
+                foreignField: "email",
+                as: "allBookings",
+              },
+            },
+            {
               $addFields: {
                 numberOfParcels: { $size: "$userBookings.bookings" },
-                totalCalcPrice: { $ifNull: [{ $arrayElemAt: ["$userBookings.totalCalcPrice", 0] }, 0] },
+                totalCalcPrice: {
+                  $ifNull: [
+                    { $arrayElemAt: ["$userBookings.totalCalcPrice", 0] },
+                    0,
+                  ],
+                },
+                totalBookingsCount: { $size: "$allBookings" }, // Count all bookings regardless of payment status
               },
             },
             {
               $project: {
                 userBookings: 0, // Exclude the userBookings array from the result
+                allBookings: 0, // Exclude the allBookings array from the result
               },
             },
             {
@@ -195,7 +211,7 @@ async function run() {
             },
           ])
           .toArray();
-    
+
         if (result.length === 0) {
           console.log("No users found.");
         } else {
@@ -207,8 +223,6 @@ async function run() {
         res.status(500).send({ message: "Error fetching users" });
       }
     });
-    
-    
 
     // app.get("/allUsers", verifyToken, verifyAdmin, async (req, res) => {
     //   try {
@@ -286,8 +300,36 @@ async function run() {
               },
             },
             {
+              $lookup: {
+                from: "reviews",
+                let: { deliveryManId: { $toString: "$_id" } }, // convert ObjectId to string
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: {
+                        $eq: ["$selectedDeliveryMan", "$$deliveryManId"],
+                      },
+                    },
+                  },
+                  {
+                    $group: {
+                      _id: null,
+                      avgRating: { $avg: "$rating" }, // assuming 'rating' is the field with review scores
+                    },
+                  },
+                ],
+                as: "reviewStats",
+              },
+            },
+            {
+              $addFields: {
+                avgRating: { $arrayElemAt: ["$reviewStats.avgRating", 0] },
+              },
+            },
+            {
               $project: {
                 deliveredParcels: 0,
+                reviewStats: 0,
               },
             },
             {
@@ -307,7 +349,6 @@ async function run() {
         res.status(500).send({ message: "Error fetching delivery men" });
       }
     });
-
 
     // bookings collection api's
     app.post("/bookings", verifyToken, async (req, res) => {
@@ -453,8 +494,59 @@ async function run() {
     // post payment info on db
     app.post("/payments", verifyToken, async (req, res) => {
       const payment = req.body;
-      console.log(payment);
+      // console.log(payment);
       const result = await paymentsCollection.insertOne(payment);
+      res.json(result);
+    });
+
+    //get delivery man info for my delivery list
+    app.get("/deliveryman/:email",verifyToken, async (req, res) => {
+      const email = req.params.email;
+      // console.log(`Request received for email: ${email}`);
+    
+      try {
+        // Step 1: Check if the user with the provided email is a deliveryman
+        const deliveryman = await usersCollection.findOne({ email, role: 'delivery man' });
+        // console.log(deliveryman)
+    
+        if (!deliveryman) {
+          return res.status(404).send({ message: "Deliveryman not found" });
+        }
+    
+        // Step 2: Get the bookings for the deliveryman
+        const bookings = await bookingsCollection.find({ selectedDeliveryMan: deliveryman._id.toString() }).toArray();
+        // console.log(bookings)
+    
+        if (bookings.length === 0) {
+          return res.status(404).send({ message: "No bookings found for this deliveryman" });
+        }
+    
+        // Step 3: Extract required information from the bookings
+        const bookingDetails = bookings.map(booking => ({
+          bookedUserName: booking.name,
+          receiversName: booking.receiversName,
+          bookedUserPhone: booking.phoneNumber,
+          requestedDeliveryDate: booking.requestedDeliveryDate,
+          approximateDeliveryDate: booking.approximateDeliveryDate,
+          receiversPhoneNumber: booking.receiversPhoneNumber,
+          receiversAddress: booking.receiversAddress,
+          // viewLocationButton: booking.viewLocationButton // Assuming this field exists
+        }));
+    
+        // Step 4: Send the response
+        res.send(bookingDetails);
+    
+      } catch (error) {
+        console.error("An error occurred:", error);
+        res.status(500).send({ message: "An error occurred", error });
+      }
+    });
+
+    // posting reviews on db
+    app.post("/reviews", verifyToken, async (req, res) => {
+      const review = req.body;
+      // console.log(review);
+      const result = await reviewsCollection.insertOne(review);
       res.json(result);
     });
 
