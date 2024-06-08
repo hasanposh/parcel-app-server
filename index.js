@@ -36,6 +36,9 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     const usersCollection = client.db("QuokkoParcelDB").collection("users");
+    const paymentsCollection = client
+      .db("QuokkoParcelDB")
+      .collection("payments");
     const bookingsCollection = client
       .db("QuokkoParcelDB")
       .collection("bookings");
@@ -123,22 +126,26 @@ async function run() {
       res.json(result);
     });
 
-    // get all usersOnly from users collection
-    // app.get("/users", verifyToken, verifyToken, async (req, res) => {
-    //   try {
-    //     const result = await usersCollection.find({ role: 'user' }).toArray();
-    //     if (result.length === 0) {
-    //       console.log("No users found.");
-    //     } else {
-    //       //   console.log("Users found:", result);
-    //     }
-    //     res.send(result);
-    //   } catch (error) {
-    //     console.error("Error fetching users:", error);
-    //     res.status(500).send({ message: "Error fetching users" });
-    //   }
-    // });
+    // get a user info by email from db
+    app.get("/users/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      console.log(email);
+      const result = await usersCollection.findOne({ email });
+      res.send(result);
+    });
 
+    // making user to admin or deliver man
+    app.put("/users/:email", verifyToken,verifyAdmin, async (req, res) => {
+      const email = req.params.email;
+      const role = req.body.role;
+      const query = { email: email };
+      const result = await usersCollection.updateOne(query, {
+        $set: { role: role },
+      });
+      res.json(result);
+    })
+
+    // get all users for admin
     app.get("/allUsers", verifyToken, verifyAdmin, async (req, res) => {
       try {
         const result = await usersCollection
@@ -148,28 +155,47 @@ async function run() {
             },
             {
               $lookup: {
-                from: "bookings", // the name of the bookings collection
-                localField: "email", // field from users collection
-                foreignField: "email", // field from bookings collection
-                as: "bookings", // new array field containing matching bookings
+                from: "bookings",
+                let: { userEmail: "$email" },
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: { 
+                        $and: [
+                          { $eq: ["$email", "$$userEmail"] },
+                          { $eq: ["$payment", "done"] } // Only include bookings with payment status 'done'
+                        ]
+                      },
+                    },
+                  },
+                  {
+                    $group: {
+                      _id: "$email",
+                      totalCalcPrice: { $sum: "$calcPrice" },
+                      bookings: { $push: "$$ROOT" }
+                    },
+                  },
+                ],
+                as: "userBookings",
               },
             },
             {
               $addFields: {
-                numberOfParcels: { $size: "$bookings" }, // size of the bookings array
+                numberOfParcels: { $size: "$userBookings.bookings" },
+                totalCalcPrice: { $ifNull: [{ $arrayElemAt: ["$userBookings.totalCalcPrice", 0] }, 0] },
               },
             },
             {
               $project: {
-                bookings: 0, // exclude the bookings array from the result
+                userBookings: 0, // Exclude the userBookings array from the result
               },
             },
             {
-              $sort: { email: 1 }, // sort by email in ascending order
+              $sort: { email: 1 },
             },
           ])
           .toArray();
-
+    
         if (result.length === 0) {
           console.log("No users found.");
         } else {
@@ -181,6 +207,51 @@ async function run() {
         res.status(500).send({ message: "Error fetching users" });
       }
     });
+    
+    
+
+    // app.get("/allUsers", verifyToken, verifyAdmin, async (req, res) => {
+    //   try {
+    //     const result = await usersCollection
+    //       .aggregate([
+    //         {
+    //           $match: { role: "user" },
+    //         },
+    //         {
+    //           $lookup: {
+    //             from: "bookings", // the name of the bookings collection
+    //             localField: "email", // field from users collection
+    //             foreignField: "email", // field from bookings collection
+    //             as: "bookings", // new array field containing matching bookings
+    //           },
+    //         },
+    //         {
+    //           $addFields: {
+    //             numberOfParcels: { $size: "$bookings" }, // size of the bookings array
+    //           },
+    //         },
+    //         {
+    //           $project: {
+    //             bookings: 0, // exclude the bookings array from the result
+    //           },
+    //         },
+    //         {
+    //           $sort: { email: 1 }, // sort by email in ascending order
+    //         },
+    //       ])
+    //       .toArray();
+
+    //     if (result.length === 0) {
+    //       console.log("No users found.");
+    //     } else {
+    //       // console.log("Users found:", result);
+    //     }
+    //     res.send(result);
+    //   } catch (error) {
+    //     console.error("Error fetching users:", error);
+    //     res.status(500).send({ message: "Error fetching users" });
+    //   }
+    // });
 
     // get all delivery men from the users collection
     app.get("/allDeliverymen", verifyToken, verifyAdmin, async (req, res) => {
@@ -237,16 +308,9 @@ async function run() {
       }
     });
 
-    // get a user info by email from db
-    app.get("/users/:email", verifyToken, async (req, res) => {
-      const email = req.params.email;
-      console.log(email);
-      const result = await usersCollection.findOne({ email });
-      res.send(result);
-    });
 
     // bookings collection api's
-    app.post("/bookings", verifyToken, verifyAdmin, async (req, res) => {
+    app.post("/bookings", verifyToken, async (req, res) => {
       const booking = req.body;
       // console.log(booking);
       const result = await bookingsCollection.insertOne(booking);
@@ -384,6 +448,14 @@ async function run() {
       } catch (error) {
         res.status(500).send({ message: "An error occurred", error });
       }
+    });
+
+    // post payment info on db
+    app.post("/payments", verifyToken, async (req, res) => {
+      const payment = req.body;
+      console.log(payment);
+      const result = await paymentsCollection.insertOne(payment);
+      res.json(result);
     });
 
     // Connect the client to the server	(optional starting in v4.7)
