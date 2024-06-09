@@ -500,29 +500,36 @@ async function run() {
     });
 
     //get delivery man info for my delivery list
-    app.get("/deliveryman/:email",verifyToken, async (req, res) => {
+    app.get("/deliveryman/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
       // console.log(`Request received for email: ${email}`);
-    
+
       try {
         // Step 1: Check if the user with the provided email is a deliveryman
-        const deliveryman = await usersCollection.findOne({ email, role: 'delivery man' });
+        const deliveryman = await usersCollection.findOne({
+          email,
+          role: "delivery man",
+        });
         // console.log(deliveryman)
-    
+
         if (!deliveryman) {
           return res.status(404).send({ message: "Deliveryman not found" });
         }
-    
+
         // Step 2: Get the bookings for the deliveryman
-        const bookings = await bookingsCollection.find({ selectedDeliveryMan: deliveryman._id.toString() }).toArray();
+        const bookings = await bookingsCollection
+          .find({ selectedDeliveryMan: deliveryman._id.toString() })
+          .toArray();
         // console.log(bookings)
-    
+
         if (bookings.length === 0) {
-          return res.status(404).send({ message: "No bookings found for this deliveryman" });
+          return res
+            .status(404)
+            .send({ message: "No bookings found for this deliveryman" });
         }
-    
+
         // Step 3: Extract required information from the bookings
-        const bookingDetails = bookings.map(booking => ({
+        const bookingDetails = bookings.map((booking) => ({
           bookedUserName: booking.name,
           receiversName: booking.receiversName,
           bookedUserPhone: booking.phoneNumber,
@@ -530,12 +537,13 @@ async function run() {
           approximateDeliveryDate: booking.approximateDeliveryDate,
           receiversPhoneNumber: booking.receiversPhoneNumber,
           receiversAddress: booking.receiversAddress,
+          deliveryAddressLatitude: booking.deliveryAddressLatitude,
+          deliveryAddressLongitude: booking.deliveryAddressLongitude,
           // viewLocationButton: booking.viewLocationButton // Assuming this field exists
         }));
-    
+
         // Step 4: Send the response
         res.send(bookingDetails);
-    
       } catch (error) {
         console.error("An error occurred:", error);
         res.status(500).send({ message: "An error occurred", error });
@@ -548,6 +556,40 @@ async function run() {
       // console.log(review);
       const result = await reviewsCollection.insertOne(review);
       res.json(result);
+    });
+
+    // getting reviews from db for delivery man
+    app.get("/reviews/:email",verifyToken, async (req, res) => {
+      const email = req.params.email;
+      console.log(`Request received for email: ${email}`);
+
+      try {
+        // Step 1: Check if the user with the provided email is a deliveryman
+        const deliveryman = await usersCollection.findOne({
+          email,
+          role: "delivery man",
+        });
+        console.log(deliveryman);
+        if (!deliveryman) {
+          return res.status(404).send({ message: "Deliveryman not found" });
+        }
+
+        // Step 2: Get reviews for the deliveryman
+        const reviews = await reviewsCollection
+          .find({ selectedDeliveryMan: deliveryman._id.toString() })
+          .toArray();
+
+        if (reviews.length === 0) {
+          console.log("No reviews found for this deliveryman.");
+        } else {
+          console.log("Reviews found:", reviews);
+        }
+
+        res.send(reviews);
+      } catch (error) {
+        console.error("Error fetching reviews:", error);
+        res.status(500).send({ message: "Error fetching reviews" });
+      }
     });
 
     // Connect the client to the server	(optional starting in v4.7)
