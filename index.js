@@ -285,7 +285,7 @@ async function run() {
                       $expr: {
                         $and: [
                           { $eq: ["$selectedDeliveryMan", "$$deliveryManId"] },
-                          { $eq: ["$bookingStatus", "delivered"] },
+                          { $eq: ["$bookingStatus", "Delivered"] },
                         ],
                       },
                     },
@@ -438,7 +438,7 @@ async function run() {
     });
 
     // edit a single booking / update parcel
-    app.put("/bookings/:id", verifyToken, async (req, res) => {
+    app.put("/bookings/:id", async (req, res) => {
       const id = req.params.id;
       console.log(id);
       const booking = req.body;
@@ -536,11 +536,33 @@ async function run() {
           requestedDeliveryDate: booking.requestedDeliveryDate,
           approximateDeliveryDate: booking.approximateDeliveryDate,
           receiversPhoneNumber: booking.receiversPhoneNumber,
-          receiversAddress: booking.receiversAddress,
+          receiversAddress: booking.parcelDeliveryAddress,
           deliveryAddressLatitude: booking.deliveryAddressLatitude,
           deliveryAddressLongitude: booking.deliveryAddressLongitude,
+          deliveryAddressLongitude: booking.deliveryAddressLongitude,
+          bookingStatus: booking.bookingStatus,
+          bookingId: booking._id,
+
           // viewLocationButton: booking.viewLocationButton // Assuming this field exists
         }));
+
+        // cencel booking or delivered booking by delivery man
+        app.put("/bookings/deliveryman/:id", verifyToken, async (req, res) => {
+          const id = req.params.id;
+          console.log(id);
+          const booking = req.body;
+          console.log(booking);
+          const options = { upsert: true };
+          const filter = { _id: new ObjectId(id) };
+          console.log(filter);
+          const update = { $set: booking };
+          const result = await bookingsCollection.updateOne(
+            filter,
+            update,
+            options
+          );
+          res.send(result);
+        });
 
         // Step 4: Send the response
         res.send(bookingDetails);
@@ -559,7 +581,7 @@ async function run() {
     });
 
     // getting reviews from db for delivery man
-    app.get("/reviews/:email",verifyToken, async (req, res) => {
+    app.get("/reviews/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
       console.log(`Request received for email: ${email}`);
 
@@ -592,6 +614,113 @@ async function run() {
       }
     });
 
+    // stats api's for admin
+    app.get("/stats", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const result = await bookingsCollection
+          .aggregate([
+            {
+              $addFields: {
+                bookingDate: {
+                  $dateFromString: { dateString: "$BookingDate" },
+                },
+              },
+            },
+            {
+              $group: {
+                _id: {
+                  $dateToString: { format: "%Y-%m-%d", date: "$bookingDate" },
+                },
+                count: { $sum: 1 },
+              },
+            },
+            {
+              $sort: { _id: 1 }, // Sort by date in ascending order
+            },
+          ])
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "An error occurred", error });
+      }
+    });
+
+    // stats api's for admin
+    app.get("/stats-lineChart", async (req, res) => {
+      try {
+        const result = await bookingsCollection
+          .aggregate([
+            {
+              $addFields: {
+                bookingDate: {
+                  $dateFromString: { dateString: "$BookingDate" },
+                },
+              },
+            },
+            {
+              $group: {
+                _id: {
+                  $dateToString: { format: "%Y-%m-%d", date: "$bookingDate" },
+                },
+                totalBookings: { $sum: 1 },
+                deliveredBookings: {
+                  $sum: {
+                    $cond: [{ $eq: ["$bookingStatus", "Delivered"] }, 1, 0],
+                  },
+                },
+              },
+            },
+            {
+              $sort: { _id: 1 }, // Sort by date in ascending order
+            },
+          ])
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "An error occurred", error });
+      }
+    });
+
+    // stats for home page all booking , all users and all delivered parcel
+    app.get("/stats-home", async (req, res) => {
+        try {
+          const result = await bookingsCollection.aggregate([
+            {
+              $facet: {
+                totalBookings: [
+                  {
+                    $count: "total"
+                  }
+                ],
+                deliveredBookings: [
+                  {
+                    $match: {
+                      bookingStatus: "Delivered"
+                    }
+                  },
+                  {
+                    $count: "totalDelivered"
+                  }
+                ]
+              }
+            }
+          ]).toArray();
+      
+          const nonAdminUsersCount = await usersCollection.countDocuments({ role: { $ne: "admin" } });
+      
+          const stats = {
+            totalBookings: result[0].totalBookings[0]?.total || 0,
+            deliveredBookings: result[0].deliveredBookings[0]?.totalDelivered || 0,
+            nonAdminUsersCount: nonAdminUsersCount
+          };
+      
+          res.send(stats);
+        } catch (error) {
+          res.status(500).send({ message: "An error occurred", error });
+        }
+      });
+      
+    
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
     // Send a ping to confirm a successful connection
