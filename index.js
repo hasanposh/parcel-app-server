@@ -361,7 +361,7 @@ async function run() {
     // get all bookings from db for admin
     app.get("/bookings", verifyToken, verifyAdmin, async (req, res) => {
       const { startDate, endDate } = req.query;
-
+      // console.log("our dates",startDate, endDate);
       // Build the query object based on provided date range
       let query = {};
       if (startDate && endDate) {
@@ -646,7 +646,7 @@ async function run() {
     });
 
     // stats api's for admin
-    app.get("/stats-lineChart", async (req, res) => {
+    app.get("/stats-lineChart", verifyToken, verifyAdmin, async (req, res) => {
       try {
         const result = await bookingsCollection
           .aggregate([
@@ -683,51 +683,104 @@ async function run() {
 
     // stats for home page all booking , all users and all delivered parcel
     app.get("/stats-home", async (req, res) => {
-        try {
-          const result = await bookingsCollection.aggregate([
+      try {
+        const result = await bookingsCollection
+          .aggregate([
             {
               $facet: {
                 totalBookings: [
                   {
-                    $count: "total"
-                  }
+                    $count: "total",
+                  },
                 ],
                 deliveredBookings: [
                   {
                     $match: {
-                      bookingStatus: "Delivered"
-                    }
+                      bookingStatus: "Delivered",
+                    },
                   },
                   {
-                    $count: "totalDelivered"
-                  }
-                ]
-              }
-            }
-          ]).toArray();
-      
-          const nonAdminUsersCount = await usersCollection.countDocuments({ role: { $ne: "admin" } });
-      
-          const stats = {
-            totalBookings: result[0].totalBookings[0]?.total || 0,
-            deliveredBookings: result[0].deliveredBookings[0]?.totalDelivered || 0,
-            nonAdminUsersCount: nonAdminUsersCount
-          };
-      
-          res.send(stats);
-        } catch (error) {
-          res.status(500).send({ message: "An error occurred", error });
-        }
-      });
-      
+                    $count: "totalDelivered",
+                  },
+                ],
+              },
+            },
+          ])
+          .toArray();
+
+        const nonAdminUsersCount = await usersCollection.countDocuments({
+          role: { $nin: ["admin", "delivery man"] },
+        });
+
+        const stats = {
+          totalBookings: result[0].totalBookings[0]?.total || 0,
+          deliveredBookings:
+            result[0].deliveredBookings[0]?.totalDelivered || 0,
+          nonAdminUsersCount: nonAdminUsersCount,
+        };
+
+        res.send(stats);
+      } catch (error) {
+        res.status(500).send({ message: "An error occurred", error });
+      }
+    });
+
+    // top delivery man from db for home
+    app.get("/top-delivery-man", async (req, res) => {
+      try {
+        // Step 1: Get all delivery men from the usersCollection
+        const deliveryMen = await usersCollection
+          .find({ role: "delivery man" })
+          .project({ _id: 1, name: 1, imageUrl: 1 })
+          .toArray();
     
+        // Step 2: Calculate the average rating and total bookings for each delivery man
+        const deliveryMenWithRatings = await Promise.all(
+          deliveryMen.map(async (deliveryMan) => {
+            const deliveryManId = deliveryMan._id.toString();
+    
+            // Get total bookings count
+            const totalBookings = await bookingsCollection
+              .countDocuments({ selectedDeliveryMan: deliveryManId });
+    
+            // Calculate average rating
+            const reviews = await reviewsCollection
+              .aggregate([
+                { $match: { selectedDeliveryMan: deliveryManId } },
+                { $group: { _id: null, avgRating: { $avg: "$rating" } } }
+              ])
+              .toArray();
+    
+            const avgRating = reviews.length > 0 ? reviews[0].avgRating : 0;
+    
+            return {
+              ...deliveryMan,
+              totalBookings,
+              avgRating,
+            };
+          })
+        );
+    
+        // Step 3: Sort the delivery men by average rating and limit to top 3
+        const topDeliveryMen = deliveryMenWithRatings
+          .sort((a, b) => b.avgRating - a.avgRating)
+          .slice(0, 3);
+    
+        res.send(topDeliveryMen);
+      } catch (error) {
+        res.status(500).send({ message: "An error occurred", error });
+      }
+    });
+    
+    
+
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
